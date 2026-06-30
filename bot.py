@@ -1,29 +1,40 @@
 import os
 import sys
 import logging
+import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackQueryHandler, ContextTypes
 from deep_translator import GoogleTranslator
 
-# --- Setup Logging ---
+# Enable logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# --- Environment Variable Handling ---
+# Get bot token from environment variable
 def get_token():
-    token = os.environ.get('BOT_TOKEN') or os.environ.get('TELEGRAM_BOT_TOKEN')
+    """Get bot token from environment variables."""
+    token = os.environ.get('BOT_TOKEN')
     if not token:
-        logger.error("❌ No BOT_TOKEN found! Please add it to Railway Variables.")
+        token = os.environ.get('TELEGRAM_BOT_TOKEN')
+    if not token:
+        logger.error("❌ No BOT_TOKEN found in environment variables!")
+        logger.error("Please add BOT_TOKEN to your Railway Variables.")
+        logger.error("1. Go to Railway dashboard")
+        logger.error("2. Click on your project")
+        logger.error("3. Click on Variables tab")
+        logger.error("4. Add BOT_TOKEN with your token from @BotFather")
         sys.exit(1)
     return token
 
 TOKEN = get_token()
 logger.info("✅ Bot token loaded successfully!")
 
-# --- Bot Constants ---
+# Store user preferences (in-memory, resets on bot restart)
+user_languages = {}
+
 # Popular languages for quick selection
 POPULAR_LANGUAGES = {
     'en': '🇬🇧 English',
@@ -40,40 +51,42 @@ POPULAR_LANGUAGES = {
     'ko': '🇰🇷 Korean',
     'nl': '🇳🇱 Dutch',
     'tr': '🇹🇷 Turkish',
-    'vi': '🇻🇳 Vietnamese'
+    'vi': '🇻🇳 Vietnamese',
+    'el': '🇬🇷 Greek',
+    'pl': '🇵🇱 Polish',
+    'uk': '🇺🇦 Ukrainian',
+    'he': '🇮🇱 Hebrew',
+    'th': '🇹🇭 Thai'
 }
 
-# Store user preferences (in-memory, resets on bot restart)
-user_languages = {}
-
-# --- Helper Functions ---
+# Helper Functions
 def build_language_keyboard() -> InlineKeyboardMarkup:
     """Builds an inline keyboard for language selection."""
     keyboard = []
     row = []
     for lang_code, lang_name in POPULAR_LANGUAGES.items():
         row.append(InlineKeyboardButton(lang_name, callback_data=f"lang_{lang_code}"))
-        if len(row) == 2:
+        if len(row) == 2:  # 2 buttons per row
             keyboard.append(row)
             row = []
-    if row:
+    if row:  # Add remaining buttons
         keyboard.append(row)
     keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="lang_cancel")])
     return InlineKeyboardMarkup(keyboard)
 
-# --- Command Handlers ---
+# Command Handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send a welcome message."""
     user = update.effective_user
     welcome_text = f"""
 🌍 **Welcome to LangSwaapBot, {user.first_name}!**
 
-I translate text between multiple languages.
+I translate text between multiple languages instantly.
 
 **How to use:**
-1. Use /lang to choose your target language
-2. Send me any text
-3. I'll translate it instantly!
+1️⃣ Use /lang to choose your target language
+2️⃣ Send me any text message
+3️⃣ I'll translate it instantly!
 
 **Commands:**
 /start - Show this welcome message
@@ -81,12 +94,11 @@ I translate text between multiple languages.
 /help - Show all commands
 /settings - View your current settings
 
-**Supported languages:** 25+ languages including English, Spanish, French, German, Chinese, and more!
+**Supported languages:** 20+ languages including English, Spanish, French, German, Chinese, Arabic, Hindi, Japanese, Korean, and more!
 
 💡 **Tip:** Your language preference is saved for future translations!
 """
     await update.message.reply_text(welcome_text)
-
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send a help message."""
@@ -104,12 +116,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 /help - Show this help message
 
 **Supported Languages:**
-English, Spanish, French, German, Italian, Portuguese, Russian, Chinese, Japanese, Arabic, Hindi, Korean, Dutch, Turkish, Vietnamese, and more!
+English, Spanish, French, German, Italian, Portuguese, Russian, Chinese, Japanese, Arabic, Hindi, Korean, Dutch, Turkish, Vietnamese, Greek, Polish, Ukrainian, Hebrew, Thai, and more!
 
 💡 **Pro tip:** Your language choice is remembered for your session!
 """
     await update.message.reply_text(help_text)
-
 
 async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show language selection menu."""
@@ -118,7 +129,6 @@ async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "🌐 **Select your target language:**\n\nChoose the language you want to translate into.",
         reply_markup=keyboard
     )
-
 
 async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show user settings."""
@@ -132,8 +142,7 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         f"Use /lang to change your target language."
     )
 
-
-# --- Callback Handler for Buttons ---
+# Callback Handler for Buttons
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles language selection from inline buttons."""
     query = update.callback_query
@@ -157,8 +166,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
         logger.info(f"User {user_id} set language to {lang_code}")
 
-
-# --- Core Translation Logic ---
+# Core Translation Logic
 async def translate_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Translate user message to their selected language."""
     user_text = update.message.text
@@ -169,27 +177,30 @@ async def translate_message(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     target_name = POPULAR_LANGUAGES.get(target_language, target_language)
     
     try:
+        # Show typing indicator
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+        
         # Translate using deep-translator
         translator = GoogleTranslator(target=target_language)
         translated_text = translator.translate(user_text)
         
+        # Format and send response
         response = (
-            f"<b>🔤 Original:</b>\n{user_text}\n\n"
-            f"<b>🌐 Translation ({target_name}):</b>\n{translated_text}"
+            f"🔤 **Original:**\n{user_text}\n\n"
+            f"🌐 **Translation ({target_name}):**\n{translated_text}"
         )
         
-        await update.message.reply_text(response, parse_mode="HTML")
+        await update.message.reply_text(response, parse_mode="Markdown")
         logger.info(f'Translation successful for user {user_id} to {target_language}')
         
     except Exception as e:
         logger.error(f'Translation error for user {user_id}: {str(e)}')
         await update.message.reply_text(
-            "❌ Translation error. Please try again.\n"
+            "❌ **Translation error.** Please try again.\n\n"
             "Make sure your text is valid and try a different language."
         )
 
-
-# --- Main Function ---
+# Main Function
 def main() -> None:
     """Start the bot."""
     try:
@@ -216,7 +227,6 @@ def main() -> None:
     except Exception as e:
         logger.error(f"❌ Fatal error: {e}")
         sys.exit(1)
-
 
 if __name__ == '__main__':
     main()
