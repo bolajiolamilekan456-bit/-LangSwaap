@@ -1,7 +1,6 @@
 import os
 import sys
 import logging
-import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackQueryHandler, ContextTypes
 from deep_translator import GoogleTranslator
@@ -22,10 +21,6 @@ def get_token():
     if not token:
         logger.error("❌ No BOT_TOKEN found in environment variables!")
         logger.error("Please add BOT_TOKEN to your Railway Variables.")
-        logger.error("1. Go to Railway dashboard")
-        logger.error("2. Click on your project")
-        logger.error("3. Click on Variables tab")
-        logger.error("4. Add BOT_TOKEN with your token from @BotFather")
         sys.exit(1)
     return token
 
